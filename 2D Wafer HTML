@@ -1,0 +1,106 @@
+import pandas as pd
+import numpy as np
+from scipy.interpolate import griddata
+import plotly.graph_objects as go
+from tkinter import filedialog, Tk
+import webbrowser
+
+
+# Fit a plane to the outer points
+def fit_plane(points, values):
+    A = np.c_[points[:, 0], points[:, 1], np.ones(points.shape[0])]
+    C, _, _, _ = np.linalg.lstsq(A, values, rcond=None)
+    return C
+
+
+# Remove the fitted plane
+def remove_plane(points, values, coefficients):
+    return values - (coefficients[0] * points[:, 0] + coefficients[1] * points[:, 1] + coefficients[2])
+
+
+# Generate the 2D heatmap
+def generate_heatmap(points, corrected_values, bow, warp):
+    # Create grid for the heatmap
+    x = np.linspace(points[:, 0].min(), points[:, 0].max(), 200)
+    y = np.linspace(points[:, 1].min(), points[:, 1].max(), 200)
+    x_grid, y_grid = np.meshgrid(x, y)
+    z_grid = griddata(points, corrected_values, (x_grid, y_grid), method='cubic')
+
+    # Create a heatmap using Plotly
+    fig = go.Figure(data=go.Heatmap(
+        x=x,
+        y=y,
+        z=z_grid,
+        colorscale='Viridis',
+        colorbar=dict(title="Corrected Z (Height)", tickformat=".2f"),
+    ))
+
+    fig.update_layout(
+        title=f"Wafer Heatmap<br>Bow: {bow:.1f} µm | Warp: {warp:.1f} µm",
+        xaxis_title="X Coordinate",
+        yaxis_title="Y Coordinate",
+        xaxis=dict(scaleanchor="y", scaleratio=1),  # Ensure square aspect ratio
+        yaxis=dict(scaleanchor="x", scaleratio=1)
+    )
+
+    # Save the plot to an HTML file and automatically open it
+    output_file = "wafer_heatmap.html"
+    fig.write_html(output_file)
+    print(f"Heatmap saved as {output_file}")
+    webbrowser.open(output_file)
+
+
+# Calculate bow and warp
+def calculate_bow_and_warp(points, corrected_values):
+    # Interpolate the center point
+    center_value = griddata(points, corrected_values, (np.array([0]), np.array([0])), method='linear')[0]
+
+    # Bow: Difference between center and mean
+    bow = (center_value - np.mean(corrected_values)) * 1000  # Convert to microns
+
+    # Warp: Peak-to-peak range
+    warp = np.ptp(corrected_values) * 1000  # Convert to microns
+
+    # Debugging output for bow and warp
+    print(f"Center value: {center_value}")
+    print(f"Mean of corrected values: {np.mean(corrected_values)}")
+    print(f"Calculated Bow (µm): {bow}")
+    print(f"Calculated Warp (µm): {warp}")
+
+    return bow, warp
+
+
+def main():
+    # File selection dialog
+    root = Tk()
+    root.withdraw()
+    file_path = filedialog.askopenfilename(
+        title="Select the wafer data file",
+        filetypes=(("Text Files", "*.txt"), ("All Files", "*.*"))
+    )
+    if not file_path:
+        print("No file selected. Exiting.")
+        return
+
+    # Read the data file
+    try:
+        df = pd.read_csv(file_path, delimiter=",", skipinitialspace=True)
+        points = df[["X", "Y"]].values
+        values = df["Z"].values
+    except Exception as e:
+        print(f"Error reading the file: {e}")
+        return
+
+    # Fit and remove the plane
+    coefficients = fit_plane(points, values)
+    corrected_values = remove_plane(points, values, coefficients)
+
+    # Calculate bow and warp
+    bow, warp = calculate_bow_and_warp(points, corrected_values)
+
+    # Generate the heatmap
+    generate_heatmap(points, corrected_values, bow, warp)
+
+
+if __name__ == "__main__":
+    main()
